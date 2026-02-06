@@ -17,22 +17,88 @@ Designed with minimal technical setup required.
 ## 🛠️ Installation & Setup
 
 ### Prerequisites
-*   **Operating System**: macOS or Windows 10/11
-*   **FFmpeg** (Required for Whisper).
-    *   *macOS*: Script installs via Homebrew.
-    *   *Windows*: Script guides you to install via `winget` or manual download.
+
+* **Operating System**: macOS or Windows 10/11
+* **FFmpeg** (Required for Whisper)
+  + *macOS*: Script installs via Homebrew
+  + *Windows*: Script guides you to install via `winget` or manual download
 
 ### First Time Setup
-1.  **Download** the entire `AudioCheck` folder to your computer.
-2.  **Locate** the startup script:
-    *   **macOS**: `Run AudioCheck.command`
-    *   **Windows**: `Run AudioCheck.bat`
-3.  **Authorize/Run**:
-    *   **macOS**: Right-click > Open > Open.
-    *   **Windows**: Double-click. (If "Windows protected your PC" appears -> More Info -> Run Anyway).
-4.  **Wait**: The first time you run it, it will take a few minutes to:
-    *   Create a virtual Python environment.
-    *   Download the necessary libraries.
+
+**Choose one of the following methods:**
+
+#### Option 1: Clone with Git (Recommended)
+
+If you have Git installed on your computer:
+
+1. **Open Terminal** (macOS) or **Command Prompt/PowerShell** (Windows)
+
+2. **Navigate to where you want to install AudioCheck**:
+   ```bash
+   cd ~/Desktop  # Or any folder you prefer
+   ```
+
+3. **Clone the repository**:
+   ```bash
+   git clone https://github.com/woohyeuk-leo-chang/AudioCheck.git
+   ```
+
+4. **Navigate into the folder**:
+   ```bash
+   cd AudioCheck
+   ```
+
+5. **Continue to "Running the Application"** below
+
+#### Option 2: Download ZIP
+
+If you don't have Git installed:
+
+1. **Download** the repository:
+   * Click the green **"Code"** button
+   * Select **"Download ZIP"**
+
+2. **Extract** the ZIP file to a location on your computer (e.g., Desktop or Documents)
+
+3. **Continue to "Running the Application"** below
+
+---
+
+### Running the Application
+
+1. **Locate** the startup script in the `AudioCheck` folder:
+   * **macOS**: `Run AudioCheck.command`
+   * **Windows**: `Run AudioCheck.bat`
+
+2. **Launch the application**:
+   * **macOS**: 
+     - Right-click on `Run AudioCheck.command`
+     - Select **"Open"**
+     - If prompted, click **"Open"** again to authorize
+   * **Windows**: 
+     - Double-click `Run AudioCheck.bat`
+     - If "Windows protected your PC" appears:
+       + Click **"More info"**
+       + Click **"Run anyway"**
+
+3. **First-time setup** (automatic):
+   * The script will create a Python virtual environment
+   * Download and install necessary libraries
+   * This takes ~2-5 minutes
+   * A browser window will open when ready
+
+---
+
+### Updating AudioCheck
+
+If you used **Git clone**, you can easily update to the latest version:
+
+```bash
+cd AudioCheck
+git pull origin main
+```
+
+If you **downloaded the ZIP**, you'll need to download the latest version manually and extract it again.
 
 ---
 
