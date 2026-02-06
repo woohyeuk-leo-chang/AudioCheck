@@ -1,8 +1,8 @@
-# AudioCheck 🎧✅
+# AudioCheck
 
 **AudioCheck** is a user-friendly tool for verifying and correcting audio transcriptions. It uses local AI (OpenAI Whisper) to automatically transcribe potential participant audio and compares it against target phrases, highlighting errors for easy verification.
 
-Designed for Undergraduate Research Assistants (RAs) with minimal technical setup required.
+Designed with minimal technical setup required.
 
 ## ✨ Key Features
 
