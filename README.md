@@ -17,7 +17,7 @@ Designed for Undergraduate Research Assistants (RAs) with minimal technical setu
 ## 🛠️ Installation & Setup
 
 ### Prerequisites
-*   **Operating System**: macOS OR Windows 10/11
+*   **Operating System**: macOS or Windows 10/11
 *   **FFmpeg** (Required for Whisper).
     *   *macOS*: Script installs via Homebrew.
     *   *Windows*: Script guides you to install via `winget` or manual download.
@@ -93,7 +93,3 @@ AudioCheck/
 **"I don't see my changes"**
 *   Changes are saved to `[ID]_transcription_results.csv` inside the participant's folder. If you re-run the transcription, this file might be overwritten, so be careful using the "Re-run" button if you have manually edited many variations.
 
----
-
-**Developed for UChicago Research**
-*Support Contact: [Your Name/Email]*
