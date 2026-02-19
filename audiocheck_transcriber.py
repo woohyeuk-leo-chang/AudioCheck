@@ -84,7 +84,41 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
                 trial = row.get('trial', '')
 
                 # Audio file path construction
-                audio_file_path = audio_rel_path
+                # Robust audio path finder (mirrored from GUI)
+                def find_audio_path(base_dir, pid, filename):
+                    # Normalize separators
+                    filename = filename.replace('\\', '/')
+                    
+                    candidates = []
+                    
+                    # 1. As absolute path or relative to current working directory
+                    candidates.append(filename)
+                    
+                    # 2. Relative to the participant directory inside base_dir
+                    candidates.append(os.path.join(base_dir, str(pid), filename))
+                    
+                    # 3. Handle case where filename includes "data/{pid}/" prefix
+                    if filename.startswith(f"data/{pid}/"):
+                        stripped = filename.replace(f"data/{pid}/", "", 1)
+                        candidates.append(os.path.join(base_dir, str(pid), stripped))
+                        
+                    # 4. Handle generic "data/" prefix if base_dir ends with "data"
+                    if filename.startswith("data/") and base_dir.rstrip('/').endswith("data"):
+                        parent = os.path.dirname(base_dir.rstrip('/'))
+                        candidates.append(os.path.join(parent, filename))
+
+                    # Check all candidates
+                    for c in candidates:
+                        if os.path.exists(c):
+                            return c
+                            
+                    return None
+
+                audio_file_path = find_audio_path(data_dir, participant_id, audio_rel_path)
+                
+                if not audio_file_path:
+                    # Fallback to original for error reporting
+                    audio_file_path = audio_rel_path
                 
                 transcribed_text = ""
                 similarity_score = 0.0

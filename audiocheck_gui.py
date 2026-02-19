@@ -49,7 +49,7 @@ st.sidebar.title("AudioCheck")
 # Priority: 1. Session State (if set and valid) -> 2. ./data -> 3. ../data
 found_data_dir = None
 
-possible_dirs = ["data", "../data", "../ADP1/data"]
+possible_dirs = ["data", "../data", "../Adp1/data", "../ADP1/data"]
 for d in possible_dirs:
     if os.path.exists(d) and os.path.isdir(d):
         found_data_dir = d
@@ -230,31 +230,50 @@ with c2:
         st.caption(f"Original: *{original_text}*")
 
 
+
 # Audio Player
 st.markdown("---")
-audio_path = row['audio_filename']
-full_audio_path = os.path.join(st.session_state.data_dir, str(selected_pid), audio_path) if os.path.basename(audio_path) == audio_path else audio_path
+audio_filename = row['audio_filename']
 
-# Try relative to Data Dir first, then direct path
-if not os.path.exists(audio_path):
-    # Try constructing path assuming audio is inside participant folder
-    possible_path = os.path.join(st.session_state.data_dir, str(selected_pid), audio_path)
-    if os.path.exists(possible_path):
-        audio_path = possible_path
-
-if os.path.exists(audio_path):
-    st.audio(audio_path)
-else:
-    # Try fixing path separators if on windows/mac mix
-    audio_path = audio_path.replace('\\', '/')
-    possible_path = os.path.join(st.session_state.data_dir, str(selected_pid), audio_path)
+# Robust audio path finder
+def find_audio_path(base_dir, pid, filename):
+    # Normalize separators
+    filename = filename.replace('\\', '/')
     
-    if os.path.exists(audio_path):
-        st.audio(audio_path)
-    elif os.path.exists(possible_path):
-        st.audio(possible_path)
-    else:
-        st.error(f"Audio file not found: {audio_path}")
+    candidates = []
+    
+    # 1. As absolute path or relative to current working directory
+    candidates.append(filename)
+    
+    # 2. Relative to the participant directory inside base_dir
+    # e.g. base_dir/1/audio/trial_1.wav
+    # This works if filename is just "audio/trial_1.wav"
+    candidates.append(os.path.join(base_dir, str(pid), filename))
+    
+    # 3. Handle case where filename includes "data/{pid}/" prefix
+    if filename.startswith(f"data/{pid}/"):
+        stripped = filename.replace(f"data/{pid}/", "", 1)
+        candidates.append(os.path.join(base_dir, str(pid), stripped))
+        
+    # 4. Handle generic "data/" prefix if base_dir ends with "data"
+    if filename.startswith("data/") and base_dir.rstrip('/').endswith("data"):
+        parent = os.path.dirname(base_dir.rstrip('/'))
+        candidates.append(os.path.join(parent, filename))
+
+    # Check all candidates
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+            
+    return None
+
+final_audio_path = find_audio_path(st.session_state.data_dir, selected_pid, audio_filename)
+
+if final_audio_path:
+    st.audio(final_audio_path)
+else:
+    st.error(f"Audio file not found: {audio_filename}")
+    st.markdown(f"**Search Debug:**\n- Data Dir: `{st.session_state.data_dir}`\n- Participant: `{selected_pid}`\n- Path in CSV: `{audio_filename}`")
 
 # Actions
 st.markdown("---")
