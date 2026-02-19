@@ -49,7 +49,7 @@ st.sidebar.title("AudioCheck")
 # Priority: 1. Session State (if set and valid) -> 2. ./data -> 3. ../data
 found_data_dir = None
 
-possible_dirs = ["data", "../data"]
+possible_dirs = ["data", "../data", "../ADP1/data"]
 for d in possible_dirs:
     if os.path.exists(d) and os.path.isdir(d):
         found_data_dir = d
