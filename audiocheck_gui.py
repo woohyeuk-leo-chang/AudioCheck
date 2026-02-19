@@ -1,10 +1,38 @@
-
 import streamlit as st
 import pandas as pd
 import os
 import glob
 import difflib
+import threading
+import time
+import signal
 from audiocheck_transcriber import transcribe_and_compare
+
+# --- Automatic Shutdown Logic ---
+# This stops the server when no browser tabs are active
+def monitor_sessions():
+    time.sleep(10) # Initial grace period for startup
+    while True:
+        try:
+            from streamlit.runtime import get_instance
+            rt = get_instance()
+            if rt:
+                sessions = rt._session_mgr.list_active_sessions()
+                if len(sessions) == 0:
+                    # Grace period for refreshes/switching tabs
+                    time.sleep(15) 
+                    sessions = rt._session_mgr.list_active_sessions()
+                    if len(sessions) == 0:
+                        os.kill(os.getpid(), signal.SIGINT)
+        except Exception:
+            pass
+        time.sleep(10)
+
+if "monitor_thread_started" not in st.session_state:
+    # Use a global-ish check to avoid multiple threads across reruns
+    if not any(t.name == "ShutdownMonitor" for t in threading.enumerate()):
+        threading.Thread(target=monitor_sessions, name="ShutdownMonitor", daemon=True).start()
+    st.session_state.monitor_thread_started = True
 
 # Set page title and layout
 st.set_page_config(page_title="AudioCheck", layout="wide")
@@ -132,38 +160,67 @@ csv_path = st.session_state.csv_path
 
 # Filters
 st.sidebar.markdown("---")
-st.sidebar.subheader("Review Filters")
+st.sidebar.subheader("Review Controls")
 show_low_conf = st.sidebar.checkbox("Filter by Similarity Score", value=True)
+hide_reviewed = st.sidebar.checkbox("Hide Reviewed Trials", value=False)
 
+# Filter logic
+mask = pd.Series(True, index=df.index)
 if show_low_conf:
     threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.8, 0.05)
-    # Logic: Show trials where similarity < threshold
-    filtered_df = df[df['similarity_score'] < threshold]
-    st.sidebar.caption(f"Showing trials with similarity < {threshold}")
-else:
-    filtered_df = df
+    mask &= (df['similarity_score'] < threshold)
+if hide_reviewed:
+    mask &= (~df['manual_correct'])
 
-st.sidebar.write(f"Showing {len(filtered_df)} / {len(df)} trials")
+filtered_df = df[mask].copy()
 
-# Navigation List
+# Navigation List & Sorting
 def get_trial_label(row):
     status = "✅" if row.get('manual_correct') else ("⚠️" if row['similarity_score'] < 0.8 else "✔️")
-    return f"{status} Block {row['block']}, Trial {row['trial']} ({row['similarity_score']:.2f})"
+    return f"{status} B{row['block']} T{row['trial']} ({row['similarity_score']:.2f})"
 
-filtered_indices = filtered_df.index.tolist()
+# Sorting: Unreviewed FIRST (manual_correct=False), then by Block, then by Trial
+filtered_df['sort_reviewed'] = filtered_df['manual_correct'].astype(int)
+filtered_indices = filtered_df.sort_values(['sort_reviewed', 'block', 'trial']).index.tolist()
+
+
+st.sidebar.write(f"Showing {len(filtered_indices)} / {len(df)} trials")
 
 if not filtered_indices:
     st.info("No trials match the current filters.")
-    # Show full data preview anyway
     st.markdown("### Data Preview (All Trials)")
     st.dataframe(df, use_container_width=True)
     st.stop()
 
-# Use index for selection using a unique key based on filter state to avoid errors
+# --- Selection Logic with Persistence ---
+if 'current_trial_idx' not in st.session_state or st.session_state.current_trial_idx not in filtered_indices:
+    st.session_state.current_trial_idx = filtered_indices[0]
+
+# Sidebar Navigation Buttons
+col_prev, col_next = st.sidebar.columns(2)
+curr_pos = filtered_indices.index(st.session_state.current_trial_idx)
+
+# Sync the selectbox key with the current_trial_idx before rendering
+st.session_state.temp_selectbox = st.session_state.current_trial_idx
+
+if col_prev.button("⬅️ Previous", use_container_width=True, disabled=(curr_pos == 0)):
+    st.session_state.current_trial_idx = filtered_indices[curr_pos - 1]
+    st.rerun()
+
+if col_next.button("Next ➡️", use_container_width=True, disabled=(curr_pos == len(filtered_indices) - 1)):
+    st.session_state.current_trial_idx = filtered_indices[curr_pos + 1]
+    st.rerun()
+
+def on_selectbox_change():
+    st.session_state.current_trial_idx = st.session_state.temp_selectbox
+
+# Removed 'index' because it's now handled by the state sync above
 selected_index = st.sidebar.selectbox(
     "Select Trial", 
     filtered_indices, 
     format_func=lambda i: get_trial_label(df.loc[i]),
+    key="temp_selectbox",
+    on_change=on_selectbox_change
 )
 
 # --- Main Content ---
@@ -224,6 +281,20 @@ with c2:
         on_change=update_transcription,
         label_visibility="collapsed"
     )
+
+    def update_correct():
+        # Toggle the value in the dataframe
+        new_val = st.session_state[f"correct_{selected_index}"]
+        st.session_state.data.at[selected_index, 'manual_correct'] = new_val
+        # Autosave
+        save_data(st.session_state.data, st.session_state.csv_path)
+
+    st.checkbox(
+        "Mark as Correct", 
+        value=bool(row['manual_correct']),
+        key=f"correct_{selected_index}",
+        on_change=update_correct
+    )
     
     # Show change tracking if modified
     if str(current_text) != str(original_text):
@@ -275,23 +346,6 @@ else:
     st.error(f"Audio file not found: {audio_filename}")
     st.markdown(f"**Search Debug:**\n- Data Dir: `{st.session_state.data_dir}`\n- Participant: `{selected_pid}`\n- Path in CSV: `{audio_filename}`")
 
-# Actions
-st.markdown("---")
-st.markdown("### Verification")
-
-def update_correct():
-    # Toggle the value in the dataframe
-    new_val = st.session_state[f"correct_{selected_index}"]
-    st.session_state.data.at[selected_index, 'manual_correct'] = new_val
-    # Autosave
-    save_data(st.session_state.data, st.session_state.csv_path)
-
-is_correct = st.checkbox(
-    "Mark as Correct (Override Similarity Score)", 
-    value=bool(row['manual_correct']),
-    key=f"correct_{selected_index}",
-    on_change=update_correct
-)
 
 # Data Table Preview
 st.markdown("---")
@@ -309,4 +363,11 @@ st.dataframe(
 st.markdown("---")
 with st.expander("📂 View Full Dataset (All Trials)"):
     st.dataframe(df, use_container_width=True)
+
+# Sidebar Footer - Shutdown (at the very bottom)
+st.sidebar.markdown("---")
+if st.sidebar.button("🛑 Shut Down Server", help="Click here to completely stop the application and close the terminal."):
+    st.sidebar.warning("Shutting down... You can close this tab now.")
+    time.sleep(1)
+    os.kill(os.getpid(), signal.SIGINT)
 
