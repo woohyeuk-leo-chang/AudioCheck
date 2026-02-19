@@ -130,7 +130,9 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
                     try:
                         # Transcribe with Whisper
                         # fp16=False prevents warnings on CPU (mps/cuda autofallback handled by whisper usually)
-                        result = model.transcribe(audio_file_path, fp16=False)
+                        result = model.transcribe(audio_file_path, 
+                                                  initial_prompt=target_phrase,
+                                                  fp16=False)
                         # Normalize: lower case and keep ONLY alphanumeric + spaces (regex)
                         # This handles unicode punctuation (curly quotes etc) by exclusion
                         raw_text = result["text"].lower()

@@ -6,7 +6,45 @@ import difflib
 import threading
 import time
 import signal
+import streamlit.components.v1 as components
 from audiocheck_transcriber import transcribe_and_compare
+
+# --- Keyboard Shortcuts Logic ---
+def inject_keyboard_shortcuts():
+    # This JS runs in the parent window to capture global key events
+    shortcuts_js = """
+    <script>
+    const doc = window.parent.document;
+    
+    // Use a flag to prevent multiple listeners if script re-runs
+    if (!window.parent._shortcuts_initialized) {
+        doc.addEventListener('keydown', function(e) {
+            // Ignore if user is typing in an input or textarea
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
+                return;
+            }
+
+            if (e.key === 'ArrowLeft') {
+                const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('Previous'));
+                if (btn) btn.click();
+            } else if (e.key === 'ArrowRight') {
+                const btn = Array.from(doc.querySelectorAll('button')).find(el => el.innerText.includes('Next'));
+                if (btn) btn.click();
+            } else if (e.altKey && (e.code === 'KeyC' || e.key === 'c' || e.key === 'C')) {
+                const labels = Array.from(doc.querySelectorAll('label'));
+                const target = labels.find(el => el.innerText.includes('Mark as Correct'));
+                if (target) target.click();
+            } else if (e.altKey && (e.code === 'KeyR' || e.key === 'r' || e.key === 'R')) {
+                const labels = Array.from(doc.querySelectorAll('label'));
+                const target = labels.find(el => el.innerText.includes('Mark as Reviewed'));
+                if (target) target.click();
+            }
+        });
+        window.parent._shortcuts_initialized = true;
+    }
+    </script>
+    """
+    components.html(shortcuts_js, height=0)
 
 # --- Automatic Shutdown Logic ---
 # This stops the server when no browser tabs are active
@@ -37,6 +75,9 @@ if "monitor_thread_started" not in st.session_state:
 # Set page title and layout
 st.set_page_config(page_title="AudioCheck", layout="wide")
 
+# Initialize Keyboard Shortcuts
+inject_keyboard_shortcuts()
+
 def get_participants(data_dir="data"):
     if not os.path.exists(data_dir):
         return []
@@ -58,6 +99,13 @@ def load_data(participant_id, data_dir="data"):
     
     # Ensure manual_correct is boolean
     df['manual_correct'] = df['manual_correct'].fillna(False).astype(bool)
+
+    # Ensure manual_reviewed column exists
+    if 'manual_reviewed' not in df.columns:
+        df['manual_reviewed'] = False
+    
+    # Ensure manual_reviewed is boolean
+    df['manual_reviewed'] = df['manual_reviewed'].fillna(False).astype(bool)
 
     # Ensure original_transcription column exists (for change tracking)
     if 'original_transcription' not in df.columns:
@@ -163,26 +211,41 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("Review Controls")
 show_low_conf = st.sidebar.checkbox("Filter by Similarity Score", value=True)
 hide_reviewed = st.sidebar.checkbox("Hide Reviewed Trials", value=False)
+sort_priority = st.sidebar.checkbox("Sort: Unreviewed First", value=True)
+
 
 # Filter logic
 mask = pd.Series(True, index=df.index)
 if show_low_conf:
-    threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.8, 0.05)
-    mask &= (df['similarity_score'] < threshold)
+    threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 1.0, 0.05)
+    # Important: Let corrected/reviewed items stay even if they now have high scores
+    mask &= (df['similarity_score'] < threshold) | (df['manual_correct']) | (df['manual_reviewed'])
+
 if hide_reviewed:
-    mask &= (~df['manual_correct'])
+    # Explicitly remove finished items if requested
+    mask &= (~df['manual_reviewed'])
 
 filtered_df = df[mask].copy()
 
 # Navigation List & Sorting
 def get_trial_label(row):
-    status = "✅" if row.get('manual_correct') else ("⚠️" if row['similarity_score'] < 0.8 else "✔️")
+    # Icons: 🔵 = Corrected, ✅ = Reviewed, ⚠️ = Low confidence, ✔️ = High confidence
+    if row.get('manual_reviewed'):
+        status = "✅"
+    elif row.get('manual_correct'):
+        status = "🔵"
+    else:
+        status = "⚠️" if row['similarity_score'] < 0.8 else "✔️"
     return f"{status} B{row['block']} T{row['trial']} ({row['similarity_score']:.2f})"
 
-# Sorting: Unreviewed FIRST (manual_correct=False), then by Block, then by Trial
-filtered_df['sort_reviewed'] = filtered_df['manual_correct'].astype(int)
-filtered_indices = filtered_df.sort_values(['sort_reviewed', 'block', 'trial']).index.tolist()
-
+# Sorting Logic
+if sort_priority:
+    # Unreviewed first (manual_reviewed=0), then Block/Trial
+    filtered_df['sort_reviewed'] = filtered_df['manual_reviewed'].astype(int)
+    filtered_indices = filtered_df.sort_values(['sort_reviewed', 'block', 'trial']).index.tolist()
+else:
+    # Natural order (Block/Trial)
+    filtered_indices = filtered_df.sort_values(['block', 'trial']).index.tolist()
 
 st.sidebar.write(f"Showing {len(filtered_indices)} / {len(df)} trials")
 
@@ -283,18 +346,46 @@ with c2:
     )
 
     def update_correct():
-        # Toggle the value in the dataframe
-        new_val = st.session_state[f"correct_{selected_index}"]
-        st.session_state.data.at[selected_index, 'manual_correct'] = new_val
-        # Autosave
+        st.session_state.data.at[selected_index, 'manual_correct'] = st.session_state[f"correct_{selected_index}"]
         save_data(st.session_state.data, st.session_state.csv_path)
 
-    st.checkbox(
-        "Mark as Correct", 
-        value=bool(row['manual_correct']),
-        key=f"correct_{selected_index}",
-        on_change=update_correct
-    )
+    def update_reviewed():
+        new_val = st.session_state[f"reviewed_{selected_index}"]
+        st.session_state.data.at[selected_index, 'manual_reviewed'] = new_val
+        save_data(st.session_state.data, st.session_state.csv_path)
+        
+        # Auto-advance logic: Find the next NOT-YET-REVIEWED trial in the queue
+        if new_val:
+            try:
+                curr_idx_in_queue = filtered_indices.index(selected_index)
+                next_unreviewed = None
+                for i in range(curr_idx_in_queue + 1, len(filtered_indices)):
+                    candidate_id = filtered_indices[i]
+                    if not st.session_state.data.at[candidate_id, 'manual_reviewed']:
+                        next_unreviewed = candidate_id
+                        break
+                if next_unreviewed is not None:
+                    st.session_state.current_trial_idx = next_unreviewed
+            except (ValueError, IndexError):
+                pass
+
+    col_btn_1, col_btn_2 = st.columns(2)
+    with col_btn_1:
+        st.checkbox(
+            "Mark as Correct (🔵)", 
+            value=bool(row['manual_correct']),
+            key=f"correct_{selected_index}",
+            on_change=update_correct,
+            help="Indicates the transcription is accurate (Alt + C)"
+        )
+    with col_btn_2:
+        st.checkbox(
+            "Mark as Reviewed (✅)", 
+            value=bool(row['manual_reviewed']),
+            key=f"reviewed_{selected_index}",
+            on_change=update_reviewed,
+            help="Mark this trial finished and move to next (Alt + R)"
+        )
     
     # Show change tracking if modified
     if str(current_text) != str(original_text):
@@ -347,16 +438,42 @@ else:
     st.markdown(f"**Search Debug:**\n- Data Dir: `{st.session_state.data_dir}`\n- Participant: `{selected_pid}`\n- Path in CSV: `{audio_filename}`")
 
 
-# Data Table Preview
+# Data Table Preview (Focused Window)
 st.markdown("---")
-st.markdown("### Data Preview")
+st.markdown(f"### Data Preview (Focused)")
+
+# Calculate a window around the selected index to ensure it's visible
+try:
+    curr_preview_pos = filtered_indices.index(selected_index)
+    total_filtered = len(filtered_indices)
+    window_size = 7
+    
+    if total_filtered <= window_size:
+        window_indices = filtered_indices
+    else:
+        # Start with ideal centering (3 before, 3 after)
+        start_win = curr_preview_pos - 3
+        end_win = curr_preview_pos + 4
+        
+        # Adjust if hitting limits to maintain 7 rows
+        if start_win < 0:
+            start_win = 0
+            end_win = window_size
+        elif end_win > total_filtered:
+            end_win = total_filtered
+            start_win = total_filtered - window_size
+            
+        window_indices = filtered_indices[start_win:end_win]
+except (ValueError, IndexError):
+    window_indices = filtered_indices[:7] # Fallback
+
 def highlight_selected(r):
-    return ['background-color: rgba(128, 128, 128, 0.3)' if r.name == selected_index else '' for _ in r]
+    return ['background-color: rgba(64, 128, 255, 0.2)' if r.name == selected_index else '' for _ in r]
 
 st.dataframe(
-    df.loc[filtered_indices].style.apply(highlight_selected, axis=1),
+    df.loc[window_indices].style.apply(highlight_selected, axis=1),
     use_container_width=True,
-    height=300
+    hide_index=False
 )
 
 # Full Data View
@@ -364,8 +481,17 @@ st.markdown("---")
 with st.expander("📂 View Full Dataset (All Trials)"):
     st.dataframe(df, use_container_width=True)
 
-# Sidebar Footer - Shutdown (at the very bottom)
+# Sidebar Footer (at the very bottom)
 st.sidebar.markdown("---")
+with st.sidebar.expander("⌨️ Keyboard Shortcuts"):
+    st.markdown("""
+    - **← (Left Arrow)**: Previous Trial
+    - **→ (Right Arrow)**: Next Trial
+    - **Alt + C**: Toggle 'Mark as Correct'
+    - **Alt + R**: Toggle 'Mark as Reviewed'
+    - **Enter**: (While editing) Save & Stay
+    """)
+
 if st.sidebar.button("🛑 Shut Down Server", help="Click here to completely stop the application and close the terminal."):
     st.sidebar.warning("Shutting down... You can close this tab now.")
     time.sleep(1)
