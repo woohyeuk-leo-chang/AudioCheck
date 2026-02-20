@@ -8,6 +8,7 @@ import time
 import signal
 import streamlit.components.v1 as components
 from audiocheck_transcriber import transcribe_and_compare
+import numpy as np
 
 # --- Keyboard Shortcuts Logic ---
 def inject_keyboard_shortcuts():
