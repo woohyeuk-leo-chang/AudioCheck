@@ -5,6 +5,43 @@ import argparse
 import re
 
 
+def find_audio_path(base_dir, pid, filename):
+    """
+    Locates a trial's audio file. The experiment stores the path it saved to
+    (e.g. "data/1/audio/..." or "data_seq\\1\\audio\\block_1\\set_1\\trial_1.wav"),
+    which breaks once the data folder is renamed or moved, so the part after
+    the participant folder is also tried under base_dir/pid.
+    """
+    if not isinstance(filename, str) or not filename.strip():
+        return None
+    # Normalize separators
+    filename = filename.replace('\\', '/')
+    pid = str(pid)
+
+    candidates = []
+
+    # 1. As absolute path or relative to current working directory
+    candidates.append(filename)
+
+    # 2. Relative to the participant directory inside base_dir
+    # e.g. base_dir/1/audio/trial_1.wav when filename is "audio/trial_1.wav"
+    candidates.append(os.path.join(base_dir, pid, filename))
+
+    # 3. Whatever came before the participant folder ("data/1/", "data_seq/1/",
+    #    an old absolute path...), re-rooted at base_dir/pid
+    parts = filename.split('/')
+    if pid in parts[:-1]:
+        cut = parts.index(pid)
+        candidates.append(os.path.join(base_dir, pid, *parts[cut + 1:]))
+
+    # Check all candidates (files only -- an empty name must not match the folder)
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+
+    return None
+
+
 def transcribe_and_compare(participant_id, data_dir="data", status_callback=None):
     """
     Reads data csv for a participant, finds audio files, transcribes them, 
@@ -81,38 +118,8 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
                 audio_rel_path = row.get('audio_filename', '').replace('\\', '/') # Fix windows paths
                 target_phrase = row.get('phrase', '')
                 block = row.get('block', '')
+                mini_block = row.get('set', '')  # ADP2: trial numbers restart in every mini-block
                 trial = row.get('trial', '')
-
-                # Audio file path construction
-                # Robust audio path finder (mirrored from GUI)
-                def find_audio_path(base_dir, pid, filename):
-                    # Normalize separators
-                    filename = filename.replace('\\', '/')
-                    
-                    candidates = []
-                    
-                    # 1. As absolute path or relative to current working directory
-                    candidates.append(filename)
-                    
-                    # 2. Relative to the participant directory inside base_dir
-                    candidates.append(os.path.join(base_dir, str(pid), filename))
-                    
-                    # 3. Handle case where filename includes "data/{pid}/" prefix
-                    if filename.startswith(f"data/{pid}/"):
-                        stripped = filename.replace(f"data/{pid}/", "", 1)
-                        candidates.append(os.path.join(base_dir, str(pid), stripped))
-                        
-                    # 4. Handle generic "data/" prefix if base_dir ends with "data"
-                    if filename.startswith("data/") and base_dir.rstrip('/').endswith("data"):
-                        parent = os.path.dirname(base_dir.rstrip('/'))
-                        candidates.append(os.path.join(parent, filename))
-
-                    # Check all candidates
-                    for c in candidates:
-                        if os.path.exists(c):
-                            return c
-                            
-                    return None
 
                 audio_file_path = find_audio_path(data_dir, participant_id, audio_rel_path)
                 
@@ -124,7 +131,7 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
                 similarity_score = 0.0
                 error_msg = ""
                 
-                log(f"[{i+1}/{total_rows}] Block {block}, Trial {trial}: {audio_file_path}")
+                log(f"[{i+1}/{total_rows}] Block {block}, Set {mini_block}, Trial {trial}: {audio_file_path}")
 
                 if os.path.exists(audio_file_path):
                     try:
@@ -136,7 +143,7 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
                         # Normalize: lower case and keep ONLY alphanumeric + spaces (regex)
                         # This handles unicode punctuation (curly quotes etc) by exclusion
                         raw_text = result["text"].lower()
-                        transcribed_text = re.sub(r'[^\w\s]', '', raw_text)
+                        transcribed_text = re.sub(r'[^\w\s]', '', raw_text).strip()
                         log(f"    -> Transcribed: '{transcribed_text}'")
                     except Exception as e:
                         error_msg = f"Error processing audio file: {e}"
@@ -154,6 +161,7 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
                 
                 results.append({
                     'block': block,
+                    'set': mini_block,
                     'trial': trial,
                     'audio_filename': audio_rel_path,
                     'target_phrase': target_phrase,
@@ -168,7 +176,7 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
 
     # Write results
     if results:
-        fieldnames = ['block', 'trial', 'audio_filename', 'target_phrase', 'transcribed_text', 'similarity_score', 'error']
+        fieldnames = ['block', 'set', 'trial', 'audio_filename', 'target_phrase', 'transcribed_text', 'similarity_score', 'error']
         try:
             with open(output_csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -187,6 +195,7 @@ def transcribe_and_compare(participant_id, data_dir="data", status_callback=None
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transcribe audio files and compare with target text.")
     parser.add_argument("participant_id", help="The ID of the participant (folder name in data directory)")
+    parser.add_argument("--data-dir", default="data", help="Folder holding the participant folders (e.g. data_seq)")
     
     # Check if arguments are passed, if not prompt user
     if len(os.sys.argv) == 1:
@@ -195,4 +204,4 @@ if __name__ == "__main__":
         transcribe_and_compare(p_id)
     else:
         args = parser.parse_args()
-        transcribe_and_compare(args.participant_id)
+        transcribe_and_compare(args.participant_id, data_dir=args.data_dir)
