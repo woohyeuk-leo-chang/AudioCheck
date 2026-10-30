@@ -7,7 +7,7 @@ import threading
 import time
 import signal
 import streamlit.components.v1 as components
-from audiocheck_transcriber import transcribe_and_compare
+from audiocheck_transcriber import transcribe_and_compare, find_audio_path
 import numpy as np
 
 # --- Keyboard Shortcuts Logic ---
@@ -123,12 +123,20 @@ def save_data(df, path):
 st.sidebar.title("AudioCheck")
 
 # Data Directory Logic
-# Priority: 1. Session State (if set and valid) -> 2. ./data -> 3. ../data
+# A data folder is one holding participant folders with a "<id>_data.csv" (ADP2 saves to data_seq/).
+# Known names are tried first; otherwise any sibling folder that holds participant data is used.
+def has_participant_data(d):
+    return os.path.isdir(d) and any(
+        os.path.isfile(os.path.join(d, p, f"{p}_data.csv")) for p in os.listdir(d) if p.isdigit())
+
 found_data_dir = None
 
-possible_dirs = ["data", "../data", "../Adp1/data", "../ADP1/data"]
+possible_dirs = ["data", "data_seq", "../data", "../data_seq", "../Adp1/data", "../ADP1/data",
+                 "../Adp2/data", "../ADP2/data", "../Adp2/data_seq", "../ADP2/data_seq"]
+possible_dirs += sorted(os.path.join(root, d) for root in (".", "..") if os.path.isdir(root)
+                        for d in os.listdir(root) if d not in (".", ".."))
 for d in possible_dirs:
-    if os.path.exists(d) and os.path.isdir(d):
+    if has_participant_data(d):
         found_data_dir = d
         break
 
@@ -136,7 +144,7 @@ if not found_data_dir:
     st.error("### ⚠️ Data Folder Not Found")
     st.markdown("""
     **Please follow these steps:**
-    1. Create a folder named `data` in the same directory as this tool.
+    1. Create a folder named `data` (or `data_seq`) in the same directory as this tool.
     2. Place your participant folders (e.g., `101`, `102`) inside that `data` folder.
     3. Click the button below to reload.
     """)
@@ -229,6 +237,8 @@ if hide_reviewed:
 filtered_df = df[mask].copy()
 
 # Navigation List & Sorting
+has_set = 'set' in df.columns and df['set'].notna().any()   # results from before 'set' was saved lack it
+
 def get_trial_label(row):
     # Icons: 🔵 = Corrected, ✅ = Reviewed, ⚠️ = Low confidence, ✔️ = High confidence
     if row.get('manual_reviewed'):
@@ -237,16 +247,18 @@ def get_trial_label(row):
         status = "🔵"
     else:
         status = "⚠️" if row['similarity_score'] < 0.8 else "✔️"
-    return f"{status} B{row['block']} T{row['trial']} ({row['similarity_score']:.2f})"
+    mini_block = f" S{int(float(row['set']))}" if has_set and pd.notna(row['set']) else ""
+    return f"{status} B{row['block']}{mini_block} T{row['trial']} ({row['similarity_score']:.2f})"
 
-# Sorting Logic
+# Sorting Logic (ADP2 restarts trial numbers in every mini-block, so sort by set too)
+order = ['block', 'set', 'trial'] if has_set else ['block', 'trial']
 if sort_priority:
     # Unreviewed first (manual_reviewed=0), then Block/Trial
     filtered_df['sort_reviewed'] = filtered_df['manual_reviewed'].astype(int)
-    filtered_indices = filtered_df.sort_values(['sort_reviewed', 'block', 'trial']).index.tolist()
+    filtered_indices = filtered_df.sort_values(['sort_reviewed'] + order).index.tolist()
 else:
     # Natural order (Block/Trial)
-    filtered_indices = filtered_df.sort_values(['block', 'trial']).index.tolist()
+    filtered_indices = filtered_df.sort_values(order).index.tolist()
 
 st.sidebar.write(f"Showing {len(filtered_indices)} / {len(df)} trials")
 
@@ -293,7 +305,8 @@ row = df.loc[selected_index]
 # Header
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.subheader(f"Block {row['block']}, Trial {row['trial']}")
+    set_text = f", Set {int(float(row['set']))}" if has_set and pd.notna(row['set']) else ""
+    st.subheader(f"Block {row['block']}{set_text}, Trial {row['trial']}")
 with col2:
     val = row['similarity_score']
     color = "normal" if val == 1.0 else ("inverse" if val < 0.8 else "off")
@@ -397,38 +410,6 @@ with c2:
 # Audio Player
 st.markdown("---")
 audio_filename = row['audio_filename']
-
-# Robust audio path finder
-def find_audio_path(base_dir, pid, filename):
-    # Normalize separators
-    filename = filename.replace('\\', '/')
-    
-    candidates = []
-    
-    # 1. As absolute path or relative to current working directory
-    candidates.append(filename)
-    
-    # 2. Relative to the participant directory inside base_dir
-    # e.g. base_dir/1/audio/trial_1.wav
-    # This works if filename is just "audio/trial_1.wav"
-    candidates.append(os.path.join(base_dir, str(pid), filename))
-    
-    # 3. Handle case where filename includes "data/{pid}/" prefix
-    if filename.startswith(f"data/{pid}/"):
-        stripped = filename.replace(f"data/{pid}/", "", 1)
-        candidates.append(os.path.join(base_dir, str(pid), stripped))
-        
-    # 4. Handle generic "data/" prefix if base_dir ends with "data"
-    if filename.startswith("data/") and base_dir.rstrip('/').endswith("data"):
-        parent = os.path.dirname(base_dir.rstrip('/'))
-        candidates.append(os.path.join(parent, filename))
-
-    # Check all candidates
-    for c in candidates:
-        if os.path.exists(c):
-            return c
-            
-    return None
 
 final_audio_path = find_audio_path(st.session_state.data_dir, selected_pid, audio_filename)
 
